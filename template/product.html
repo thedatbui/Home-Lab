@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product["name"] }}{% endblock %}
+
+{% block content %}
+<main class="container py-5">
+  <div class="row g-5">
+    <div class="col-md-6">
+      <img class="img-fluid rounded-4 shadow-sm" src="{{ product['image_url'] }}"
+           alt="{{ product['name'] }}">
+    </div>
+    <div class="col-md-6">
+      <p class="text-secondary text-uppercase small mb-1">Shoes</p>
+      <h1 class="fw-bold">{{ product["name"] }}</h1>
+      <p class="lead">{{ product["description"] }}</p>
+      <p class="h4 mb-4">{{ "%.2f"|format(product["price_cents"] / 100) }} €</p>
+      <a class="btn btn-dark" href="#reviews">View Reviews</a>
+    </div>
+  </div>
+
+  <section id="reviews" class="mt-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="h3 mb-0">Clients Reviews</h2>
+      {% if session.get("username") %}
+        <span class="text-secondary">log as {{ session["username"] }}</span>
+      {% else %}
+        <a href="{{ url_for('login') }}">log in to leave a review</a>
+      {% endif %}
+    </div>
+
+    {% if session.get("username") %}
+      <form method="post" class="card card-body bg-light border-0 mb-4">
+        <label class="form-label" for="rating">Note</label>
+        <select class="form-select mb-3" name="rating" id="rating" required>
+          <option value="5">5 / 5</option>
+          <option value="4">4 / 5</option>
+          <option value="3">3 / 5</option>
+          <option value="2">2 / 5</option>
+          <option value="1">1 / 5</option>
+        </select>
+        <label class="form-label" for="body">Your review</label>
+        <textarea class="form-control mb-3" name="body" id="body" rows="3"
+                  required></textarea>
+        <button class="btn btn-dark align-self-start" type="submit">
+          Submit review
+        </button>
+      </form>
+    {% endif %}
+
+    {% for review in reviews %}
+      <article class="border-bottom py-3">
+        <div class="d-flex justify-content-between">
+          <strong>{{ review["username"] }}</strong>
+          <span aria-label="Note">{{ review["rating"] }} / 5</span>
+        </div>
+        {# Intentionally unsafe in this lab: this is the stored-XSS sink. #}
+        <p class="mb-0">{{ review["body"]|safe }}</p>
+      </article>
+    {% else %}
+      <p class="text-secondary">No reviews yet.</p>
+    {% endfor %}
+  </section>
+</main>
+{% endblock %}

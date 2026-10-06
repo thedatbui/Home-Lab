@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Administration{% endblock %}
+
+{% block content %}
+<main class="container py-5">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h1 class="fw-bold mb-0">Moderation of Reviews</h1>
+    </div>
+    <span class="badge text-bg-dark">{{ reviews|length }} reviews</span>
+  </div>
+
+  <p class="text-secondary">
+    This page allows you to moderate user reviews. You can view all submitted reviews, including the product name, author, rating, review content, and submission date. Please ensure that all reviews adhere to our community guidelines and take appropriate action if necessary.
+  </p>
+
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th>Author</th>
+          <th>Rating</th>
+          <th>Review</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for review in reviews %}
+          <tr>
+            <td>{{ review["product_name"] }}</td>
+            <td>{{ review["username"] }}</td>
+            <td>{{ review["rating"] }}/5</td>
+            {# Same lab sink: the admin page also renders review content. #}
+            <td>{{ review["body"]|safe }}</td>
+            <td>{{ review["created"] }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5">No reviews to moderate.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</main>
+{% endblock %}
