@@ -6,7 +6,8 @@
 <main class="container py-5">
   <div class="row g-5">
     <div class="col-md-6">
-      <img class="img-fluid rounded-4 shadow-sm" src="{{ product['image_url'] }}"
+      <img class="img-fluid rounded-4 shadow-sm"
+           src="{{ url_for('static', filename=product['image_file']) }}"
            alt="{{ product['name'] }}">
     </div>
     <div class="col-md-6">

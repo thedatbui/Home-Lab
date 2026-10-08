@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Product media{% endblock %}
+
+{% block content %}
+<main class="container py-5">
+  <div class="mb-4">
+    <p class="text-uppercase text-secondary small mb-1">Catalog management</p>
+    <h1 class="fw-bold">Product media</h1>
+    <p class="text-secondary mb-0">
+      Upload an image for a product listing.
+    </p>
+  </div>
+
+  <form method="post" enctype="multipart/form-data"
+        class="card card-body bg-light border-0 mb-5">
+    <label class="form-label" for="file">Product image</label>
+    <input class="form-control mb-3" type="file" name="file" id="file" required>
+    <button class="btn btn-dark align-self-start" type="submit">
+      Upload image
+    </button>
+  </form>
+
+  <h2 class="h4">Uploaded media</h2>
+  {% if uploaded_files %}
+    <ul class="list-group">
+      {% for filename in uploaded_files %}
+        <li class="list-group-item">{{ filename }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-secondary">No images have been uploaded yet.</p>
+  {% endif %}
+</main>
+{% endblock %}

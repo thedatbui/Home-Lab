@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Profil de {{ user["username"] }}{% endblock %}
+
+{% block content %}
+<main class="container py-5">
+  <h1>Profil utilisateur</h1>
+
+  <dl>
+    <dt>ID</dt>
+    <dd>{{ user["id"] }}</dd>
+
+    <dt>Nom d'utilisateur</dt>
+    <dd>{{ user["username"] }}</dd>
+
+    <dt>Rôle</dt>
+    <dd>{{ user["role"] }}</dd>
+  </dl>
+</main>
+{% endblock %}

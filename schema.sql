@@ -24,7 +24,7 @@ CREATE TABLE product (
   name TEXT NOT NULL,
   description TEXT NOT NULL,
   price_cents INTEGER NOT NULL,
-  image_url TEXT NOT NULL
+  image_file TEXT NOT NULL
 );
 
 CREATE TABLE review (
@@ -38,18 +38,18 @@ CREATE TABLE review (
   FOREIGN KEY (author_id) REFERENCES user (id)
 );
 
-INSERT INTO product (name, description, price_cents, image_url) VALUES
+INSERT INTO product (name, description, price_cents, image_file) VALUES
   (
     'Urban Runner',
     'a pair of lightweight running shoes designed for city streets.',
     8990,
-    'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=900&q=80'
+    'images/urban-runner.jpg'
   ),
   (
     'Trail Motion',
     'a versatile pair with a grippy sole for hiking trails.',
     11990,
-    'https://images.unsplash.com/photo-1554130847-4a4d4c5f6f0e?auto=format&fit=crop&w=900&q=80'
+    'images/urban-runner.jpg'
   );
 
 

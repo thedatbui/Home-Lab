@@ -14,6 +14,13 @@
   <p class="text-secondary">
     This page allows you to moderate user reviews. You can view all submitted reviews, including the product name, author, rating, review content, and submission date. Please ensure that all reviews adhere to our community guidelines and take appropriate action if necessary.
   </p>
+  <a class="btn btn-outline-dark mb-4" href="{{ url_for('admin_uploads') }}">
+    Manage product images
+  </a>
+  <a class="btn btn-outline-dark mb-4"
+     href="{{ url_for('admin_create_user') }}">
+    Create user
+  </a>
 
   <div class="table-responsive">
     <table class="table align-middle">
