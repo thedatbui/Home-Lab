@@ -4,7 +4,7 @@ import db
 import os
 from db import get_db
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
-
+import logging
 
 app = Flask(
     __name__,
@@ -21,6 +21,11 @@ os.makedirs(app.instance_path, exist_ok=True)
 
 db.init_app(app)
 
+logging.basicConfig(
+    filename='/var/log/myapp/app.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s'
+)
 
 @app.route("/")
 def index():
@@ -61,6 +66,7 @@ def register():
                 (username, password)
             )
             db.commit()
+            logging.info("New user registered: %s", username)
             return redirect(url_for("login"))
 
         flash(error)
@@ -73,20 +79,16 @@ def login():
         username = request.form["username"]
         password = request.form["password"]
 
-        query = (
-            f"SELECT * FROM user "
-            f"WHERE username = '{username}' "
-            f"AND password = '{password}'"
-        )
-
-        user = get_db().execute(query).fetchone()
+        query = "SELECT * FROM user WHERE username = ? AND password = ?"
+        user = get_db().execute(query, (username, password)).fetchone()
 
         if user is not None:
             session.clear()
             session["username"] = user["username"]
             session["user_id"] = user["id"]
+            logging.info("Successful login for username: %s - ip: %s", username, request.remote_addr)
             return redirect(url_for("index"))
-
+        logging.warning("Failed login attempt for username: %s - ip: %s", username, request.remote_addr)
         return "Invalid username or password"
 
     return render_template("auth/login.html")
@@ -100,12 +102,14 @@ def logout():
 def admin():
     username = session.get("username")
     if username is None:
+        logging.info("Accessing admin page for username: %s - ip: %s", username, request.remote_addr)
         return redirect(url_for("login"))
 
     user = get_db().execute(
         "SELECT role FROM user WHERE username = ?", (username,)
     ).fetchone()
     if user is None or user["role"] != "admin":
+        logging.warning("Unauthorized access attempt to admin page by username: %s - ip: %s", username, request.remote_addr)
         abort(403)
 
     reviews = get_db().execute(
@@ -148,7 +152,7 @@ def product(product_id):
                 INSERT INTO review (product_id, author_id, rating, body)
                 VALUES (?, ?, ?, ?)
                 """,
-                (product_id, author["id"], rating, escape(body)),
+                (product_id, author["id"], rating, body),
             )
             database.commit()
             flash("Thank you for your review.")
@@ -168,7 +172,7 @@ def product(product_id):
         "product.html", product=product_row, reviews=reviews
     )
 
-@app.route("/admin/create-user", methods=("GET", "POST"))
+@app.route("/admin/createUser", methods=("GET", "POST"))
 def admin_create_user():
     username = session.get("username")
     if username is None:
@@ -205,6 +209,7 @@ def admin_create_user():
                 (new_username, new_password, new_role)
             )
             db.commit()
+            logging.info("New user created: %s - ip: %s", new_username, request.remote_addr)
             flash(f"User {new_username} created successfully.")
             return redirect(url_for("admin_create_user"))
 

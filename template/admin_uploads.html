@@ -12,14 +12,12 @@
     </p>
   </div>
 
-  <form method="post" enctype="multipart/form-data"
-        class="card card-body bg-light border-0 mb-5">
-    <label class="form-label" for="file">Product image</label>
-    <input class="form-control mb-3" type="file" name="file" id="file" required>
-    <button class="btn btn-dark align-self-start" type="submit">
-      Upload image
-    </button>
-  </form>
+<form method="post"
+      action="http://10.0.2.20/upload.php"
+      enctype="multipart/form-data">
+  <input type="file" name="product_image" required>
+  <button type="submit">Upload</button>
+</form>
 
   <h2 class="h4">Uploaded media</h2>
   {% if uploaded_files %}
