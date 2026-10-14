@@ -5,14 +5,20 @@ import os
 from db import get_db
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 import logging
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(
     __name__,
     template_folder="template",
-    instance_relative_config=True
+    instance_relative_config=True,
+    # vulnerable to debug information disclosure and Werkzeug debugger exposure
+    debug=True
 )
 
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
 app.config.from_mapping(
+    # vulnerable to forged Flask session cookies because the signing key is hardcoded
     SECRET_KEY="dev",
     DATABASE=os.path.join(app.instance_path, "app.sqlite")
 )
@@ -26,6 +32,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s'
 )
+
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 @app.route("/")
 def index():
@@ -61,6 +69,7 @@ def register():
             error = "User {} is already registered.".format(username)
 
         if error is None:
+            # vulnerable to credential disclosure because passwords are stored in plaintext
             db.execute(
                 "INSERT INTO user (username, password) VALUES (?, ?)",
                 (username, password)
@@ -79,6 +88,7 @@ def login():
         username = request.form["username"]
         password = request.form["password"]
 
+        # vulnerable to credential disclosure because authentication relies on plaintext passwords
         query = "SELECT * FROM user WHERE username = ? AND password = ?"
         user = get_db().execute(query, (username, password)).fetchone()
 
@@ -202,14 +212,14 @@ def admin_create_user():
             "SELECT id FROM user WHERE username = ?", (new_username,)
         ).fetchone() is not None:
             error = f"User {new_username} is already registered."
-
         if error is None:
+            logging.info("New user created: %s - ip: %s", new_username, request.remote_addr)
+            # vulnerable to credential disclosure because admin-created passwords are stored in plaintext
             db.execute(
                 "INSERT INTO user (username, password, role) VALUES (?, ?, ?)",
                 (new_username, new_password, new_role)
             )
             db.commit()
-            logging.info("New user created: %s - ip: %s", new_username, request.remote_addr)
             flash(f"User {new_username} created successfully.")
             return redirect(url_for("admin_create_user"))
 
@@ -232,7 +242,7 @@ def admin_uploads():
 
     if request.method == "POST":
         file = request.files.get("file")
-        # Vulnerable to webshell upload attacks due to lack of file type validation and path traversal vulnerabilities
+        # vulnerable to webshell upload attacks and path traversal because the filename is client-controlled
         filepath = os.path.join(app.instance_path, "uploads", file.filename)
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         file.save(filepath)
@@ -243,6 +253,6 @@ def admin_uploads():
 
 @app.route("/all-users")
 def get_all_users():
-   # retrieve all users from the database and return a dictionary containing their information
+   # vulnerable to unauthenticated sensitive-data disclosure because all user columns are returned
     users = get_db().execute("SELECT * FROM user").fetchall()
     return dict(users=[dict(user) for user in users])

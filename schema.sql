@@ -6,6 +6,7 @@ DROP TABLE IF EXISTS product;
 CREATE TABLE user (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
+  -- vulnerable to credential disclosure because passwords are stored in plaintext
   password TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'customer'
 );
@@ -54,4 +55,5 @@ INSERT INTO product (name, description, price_cents, image_file) VALUES
 
 
   INSERT INTO user (id, username, password, role) VALUES
+  -- vulnerable to account takeover because the administrator password is hardcoded and publicly exposed
   (1, 'admin', 'adminpass', 'admin');

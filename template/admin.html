@@ -39,7 +39,7 @@
             <td>{{ review["product_name"] }}</td>
             <td>{{ review["username"] }}</td>
             <td>{{ review["rating"] }}/5</td>
-            {# Same lab sink: the admin page also renders review content. #}
+            {# vulnerable to stored XSS because review content is rendered without HTML escaping #}
             <td>{{ review["body"]|safe }}</td>
             <td>{{ review["created"] }}</td>
           </tr>

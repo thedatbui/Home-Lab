@@ -54,7 +54,7 @@
           <strong>{{ review["username"] }}</strong>
           <span aria-label="Note">{{ review["rating"] }} / 5</span>
         </div>
-        {# Intentionally unsafe in this lab: this is the stored-XSS sink. #}
+        {# vulnerable to stored XSS because review content is rendered without HTML escaping #}
         <p class="mb-0">{{ review["body"]|safe }}</p>
       </article>
     {% else %}
