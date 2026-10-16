@@ -162,7 +162,7 @@ def product(product_id):
                 INSERT INTO review (product_id, author_id, rating, body)
                 VALUES (?, ?, ?, ?)
                 """,
-                (product_id, author["id"], rating, body),
+                (product_id, author["id"], rating, escape(body)),
             )
             database.commit()
             flash("Thank you for your review.")

