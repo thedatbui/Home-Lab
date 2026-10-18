@@ -19,7 +19,7 @@ jobs:
           cache: 'pip'
 
       - name: Install tools
-        run: pip install bandit
+        run: pip install -r requirements.txt
 
       - name: Run Bandit (HTML report)
         run: bandit -r . -x ./venv -ll -f html -o bandit-report.html
