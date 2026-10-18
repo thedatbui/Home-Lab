@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}System diagnostics{% endblock %}
+
+{% block content %}
+<main class="container py-5">
+  <h1 class="fw-bold">System diagnostics</h1>
+  <p class="text-secondary">
+    Select a read-only diagnostic command for the application server.
+  </p>
+
+  <form method="post">
+    <label for="diagnostic">Diagnostic</label>
+    <select name="diagnostic" id="diagnostic">
+      {% for name in diagnostics %}
+        <option value="{{ name }}" {% if name == selected %}selected{% endif %}>
+          {{ name }}
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit">Run diagnostic</button>
+  </form>
+
+  <pre class="mt-4">{{ output }}</pre>
+</main>
+{% endblock %}

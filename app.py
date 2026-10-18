@@ -1,7 +1,7 @@
-from markupsafe import escape
-
 import db
+import hashlib
 import os
+import subprocess
 from db import get_db
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 import logging
@@ -11,8 +11,6 @@ app = Flask(
     __name__,
     template_folder="template",
     instance_relative_config=True,
-    # vulnerable to debug information disclosure and Werkzeug debugger exposure
-    debug=True
 )
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -55,6 +53,8 @@ def register():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
+        # using weak hashing algorithm (MD5) for password storage, which is vulnerable to brute-force attacks
+        password_hash = hashlib.md5(password.encode("utf-8")).hexdigest()
 
         db = get_db()
         error = None
@@ -72,7 +72,7 @@ def register():
             # vulnerable to credential disclosure because passwords are stored in plaintext
             db.execute(
                 "INSERT INTO user (username, password) VALUES (?, ?)",
-                (username, password)
+                (username, password_hash)
             )
             db.commit()
             logging.info("New user registered: %s", username)
@@ -87,17 +87,22 @@ def login():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
+        password_hash = hashlib.md5(password.encode("utf-8")).hexdigest()
+        print(f"Attempting login for username: {username} with password hash: {password_hash}")
+        next_url = request.args.get("next", url_for("index"))
 
         # vulnerable to credential disclosure because authentication relies on plaintext passwords
         query = "SELECT * FROM user WHERE username = ? AND password = ?"
-        user = get_db().execute(query, (username, password)).fetchone()
+        user = get_db().execute(query, (username, password_hash)).fetchone()
 
         if user is not None:
             session.clear()
             session["username"] = user["username"]
             session["user_id"] = user["id"]
             logging.info("Successful login for username: %s - ip: %s", username, request.remote_addr)
-            return redirect(url_for("index"))
+            # Intentionally accepts an absolute URL to demonstrate an open redirect.
+            return redirect(next_url)
+
         logging.warning("Failed login attempt for username: %s - ip: %s", username, request.remote_addr)
         return "Invalid username or password"
 
@@ -113,7 +118,7 @@ def admin():
     username = session.get("username")
     if username is None:
         logging.info("Accessing admin page for username: %s - ip: %s", username, request.remote_addr)
-        return redirect(url_for("login"))
+        return redirect(url_for("login", next=request.full_path))
 
     user = get_db().execute(
         "SELECT role FROM user WHERE username = ?", (username,)
@@ -146,7 +151,7 @@ def product(product_id):
     if request.method == "POST":
         username = session.get("username")
         if username is None:
-            return redirect(url_for("login"))
+            return redirect(url_for("login", next=request.full_path))
 
         rating = request.form.get("rating", type=int)
         body = request.form.get("body", "").strip()
@@ -162,7 +167,7 @@ def product(product_id):
                 INSERT INTO review (product_id, author_id, rating, body)
                 VALUES (?, ?, ?, ?)
                 """,
-                (product_id, author["id"], rating, escape(body)),
+                (product_id, author["id"], rating, body),
             )
             database.commit()
             flash("Thank you for your review.")
@@ -186,7 +191,7 @@ def product(product_id):
 def admin_create_user():
     username = session.get("username")
     if username is None:
-        return redirect(url_for("login"))
+        return redirect(url_for("login", next=request.full_path))
 
     user = get_db().execute(
         "SELECT role FROM user WHERE username = ?", (username,)
@@ -197,6 +202,7 @@ def admin_create_user():
     if request.method == "POST":
         new_username = request.form["username"]
         new_password = request.form["password"]
+        new_password_hash = hashlib.md5(new_password.encode("utf-8")).hexdigest()
         new_role = request.form["role"]
 
         db = get_db()
@@ -214,10 +220,9 @@ def admin_create_user():
             error = f"User {new_username} is already registered."
         if error is None:
             logging.info("New user created: %s - ip: %s", new_username, request.remote_addr)
-            # vulnerable to credential disclosure because admin-created passwords are stored in plaintext
             db.execute(
                 "INSERT INTO user (username, password, role) VALUES (?, ?, ?)",
-                (new_username, new_password, new_role)
+                (new_username, new_password_hash, new_role)
             )
             db.commit()
             flash(f"User {new_username} created successfully.")
@@ -227,6 +232,10 @@ def admin_create_user():
 
     return render_template("admin_create_user.html")
 
+@app.route("/all-users")
+def get_all_users():
+    users = get_db().execute("SELECT * FROM user").fetchall()
+    return dict(users=[dict(user) for user in users])
 
 @app.route("/admin/uploads", methods=("GET", "POST"))
 def admin_uploads():
@@ -239,20 +248,42 @@ def admin_uploads():
     ).fetchone()
     if user is None or user["role"] != "admin":
         abort(403)
+   
+    return render_template("admin_uploads.html")
+    
+@app.route("/admin/diagnostics", methods=("GET", "POST"))
+def admin_diagnostics():
+    username = session.get("username")
+    if username is None:
+        return redirect(url_for("login", next=request.full_path))
 
-    if request.method == "POST":
-        file = request.files.get("file")
-        # vulnerable to webshell upload attacks and path traversal because the filename is client-controlled
-        filepath = os.path.join(app.instance_path, "uploads", file.filename)
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        file.save(filepath)
-        flash(f"File {file.filename} uploaded successfully.")
-        return render_template("admin_uploads.html", uploaded_files=[file.filename])
-    else:
-        return render_template("admin_uploads.html")
+    user = get_db().execute(
+        "SELECT role FROM user WHERE username = ?", (username,)
+    ).fetchone()
+    if user is None or user["role"] != "admin":
+        abort(403)
 
-@app.route("/all-users")
-def get_all_users():
-   # vulnerable to unauthenticated sensitive-data disclosure because all user columns are returned
-    users = get_db().execute("SELECT * FROM user").fetchall()
-    return dict(users=[dict(user) for user in users])
+    # Intentionally allows command injection by executing user-controlled input.
+    diagnostics = {
+        "disk": "df -h",
+        "processes": "ps aux",
+        "date": "date",
+    }
+    selected = request.form.get("diagnostic", "date")
+    command = diagnostics.get(selected, diagnostics["date"])
+    output = subprocess.check_output(
+        command,
+        shell=True,
+        text=True,
+    )
+
+    return render_template(
+        "admin_diagnostics.html",
+        diagnostics=diagnostics,
+        selected=selected,
+        output=output,
+    )
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=5000)

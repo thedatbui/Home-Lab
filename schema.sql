@@ -56,4 +56,4 @@ INSERT INTO product (name, description, price_cents, image_file) VALUES
 
   INSERT INTO user (id, username, password, role) VALUES
   -- vulnerable to account takeover because the administrator password is hardcoded and publicly exposed
-  (1, 'admin', 'adminpass', 'admin');
+  (1, 'admin', '25e4ee4e9229397b6b17776bfceaf8e7', 'admin');

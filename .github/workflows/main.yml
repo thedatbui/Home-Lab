@@ -19,10 +19,12 @@ jobs:
           cache: 'pip'
 
       - name: Install tools
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt semgrep
 
       - name: Run Bandit (HTML report)
-        run: bandit -r . -x ./venv -ll -f html -o bandit-report.html
+        run: bandit app.py db.py -ll -f html -o bandit-report.html
         continue-on-error: true
 
       - name: Upload Bandit report
@@ -30,6 +32,19 @@ jobs:
         with:
           name: bandit-report
           path: bandit-report.html
+
+      - name: Run Semgrep
+        run: >
+          semgrep scan
+          --config p/owasp-top-ten
+          --config p/security-audit
+          --config p/secrets
+          --exclude app.py
+          --exclude db.py
+          --exclude .git
+          --exclude instance
+          --exclude reports
+        continue-on-error: true
 
   sca:
     runs-on: ubuntu-latest
