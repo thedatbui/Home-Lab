@@ -161,12 +161,12 @@ With a stable shell on the backend server, the attacker:
 |---|---|---|
 | Port scan (Nmap) | Partial | Portscan rule if multiple SYN packets detected |
 | Directory fuzzing (ffuf) | No | Custom rule on Nginx: >50 404s/min = HIGH alert |
-| Login brute force | Yes | Rule 5710 — SSH/auth failures |
+| Login brute force | Yes | Wazuh rules - Auth failures |
 | Webshell upload | Yes | FIM alert on `/var/www/uploads/` (new file created) |
 | Reverse shell | Partial | Outbound connection on non-standard port |
 | Honeyfile access | Yes (CRITICAL) | FIM configured with `report_changes=yes` on honeyfile |
 
-> Notable finding: SQL injection and IDOR generate no alerts out of the box — SAST (Bandit/Semgrep) is required to catch these before deployment. This illustrates why SAST and SIEM are complementary, not interchangeable.
+> Notable finding: SQL injection and IDOR generate no alerts out of the box, SAST (Bandit/Semgrep) is required to catch these before deployment. This illustrates why SAST and SIEM are complementary, not interchangeable.
 
 ---
 
@@ -182,16 +182,7 @@ With a stable shell on the backend server, the attacker:
 ```nginx
 # Rate limiting — breaks ffuf enumeration
 limit_req_zone $binary_remote_addr zone=app:10m rate=20r/m;
-limit_req zone=app burst=5 nodelay;
-
-# Hide backend information
-proxy_hide_header X-Powered-By;
-server_tokens off;
-
-# Block non-standard HTTP methods
-if ($request_method !~ ^(GET|POST|HEAD)$) {
-    return 405;
-}
+limit_req zone=app burst=20 nodelay;
 ```
 
 ---
@@ -215,7 +206,7 @@ See the detailed [CI/CD security pipeline documentation](docs/08-ci-cd-pipelines
 The application's source code is also scanned automatically on every push via a GitLab CI/CD pipeline:
 
 ```
-Push → SAST (Bandit + Semgrep) → SCA (pip-audit) → Secret Scan (Gitleaks) → Block if critical findings
+Push → SAST (Bandit) → SCA (OwASP dependency-check) → Secret Scan (Gitleaks) → Block if critical findings
 ```
 
 This closes the loop between the defensive lab (runtime detection) and secure development (shift-left scanning).
@@ -229,8 +220,8 @@ This closes the loop between the defensive lab (runtime detection) and secure de
 | Firewall | OPNsense | Network segmentation, DNAT, zone rules |
 | Reverse Proxy | Nginx | DMZ entry point, rate limiting, header hardening |
 | SIEM | Wazuh | Log aggregation, FIM, alerting, honeyfile detection |
-| SAST | Bandit, Semgrep | Static analysis of Python source code |
-| SCA | pip-audit | Known CVEs in dependencies |
+| SAST | Bandit | Static analysis of Python source code |
+| SCA | OWASP dependency-check | Known CVEs in dependencies |
 | Secret Scanning | Gitleaks | Prevents credential commits |
 | Attacker OS | Kali Linux | Nmap, ffuf, Metasploit, nc |
 
@@ -242,6 +233,6 @@ This closes the loop between the defensive lab (runtime detection) and secure de
 
 2. **Framework defaults are not the same as secure defaults.** Flask does not enable CSRF protection by default; understanding what a framework does *not* do for you is as important as knowing what it does.
 
-3. **SAST and SIEM are complementary.** IDOR and business logic flaws are invisible to runtime monitoring — they must be caught during code review or SAST. Conversely, a webshell upload is invisible to SAST but immediately visible to FIM.
+3. **SAST and SIEM are complementary.** IDOR and business logic flaws are invisible to runtime monitoring, they must be caught during code review or SAST. Conversely, a webshell upload is invisible to SAST but immediately visible to FIM.
 
 4. **Network segmentation limits blast radius.** Even with a full reverse shell on the backend server, the attacker could not pivot to the Wazuh manager or other LAN hosts without bypassing additional firewall rules.
