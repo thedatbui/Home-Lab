@@ -18,6 +18,9 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 app.config.from_mapping(
     # vulnerable to forged Flask session cookies because the signing key is hardcoded
     SECRET_KEY="dev",
+    # alternatively, you can use an environment variable for the secret key
+    # SECRET_KEY=os.environ.get("SECRET_KEY"),
+
     DATABASE=os.path.join(app.instance_path, "app.sqlite")
 )
 
@@ -55,6 +58,9 @@ def register():
         password = request.form["password"]
         # using weak hashing algorithm (MD5) for password storage, which is vulnerable to brute-force attacks
         password_hash = hashlib.md5(password.encode("utf-8")).hexdigest()
+        # alternatively, you can use a stronger hashing algorithm like bcrypt or Argon2 for better security.
+        # For example, using bcrypt:
+        # password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
         db = get_db()
         error = None
@@ -69,7 +75,6 @@ def register():
             error = "User {} is already registered.".format(username)
 
         if error is None:
-            # vulnerable to credential disclosure because passwords are stored in plaintext
             db.execute(
                 "INSERT INTO user (username, password) VALUES (?, ?)",
                 (username, password_hash)
@@ -90,8 +95,9 @@ def login():
         password_hash = hashlib.md5(password.encode("utf-8")).hexdigest()
         print(f"Attempting login for username: {username} with password hash: {password_hash}")
         next_url = request.args.get("next", url_for("index"))
+        # here next_url is taken directly from the request arguments without validation, which can lead to open redirect vulnerabilities if an attacker crafts a malicious URL.
+        # for example, an attacker could send a link like /login?next=http://malicious-site.com to trick users into visiting a malicious site after login.
 
-        # vulnerable to credential disclosure because authentication relies on plaintext passwords
         query = "SELECT * FROM user WHERE username = ? AND password = ?"
         user = get_db().execute(query, (username, password_hash)).fetchone()
 
@@ -102,6 +108,10 @@ def login():
             logging.info("Successful login for username: %s - ip: %s", username, request.remote_addr)
             # Intentionally accepts an absolute URL to demonstrate an open redirect.
             return redirect(next_url)
+            # Alternatively, you can use a safer approach to prevent open redirects by validating the next_url:
+            # if not next_url.startswith("/"):
+            #     next_url = url_for("index")
+            # return redirect(next_url)
 
         logging.warning("Failed login attempt for username: %s - ip: %s", username, request.remote_addr)
         return "Invalid username or password"
@@ -277,6 +287,17 @@ def admin_diagnostics():
         text=True,
     )
 
+    # Alternatively, you can use a safer approach to prevent command injection by validating the selected diagnostic and using a predefined mapping of commands without executing user-controlled input directly.
+    # For example:
+    # safe_commands = {
+    #     "disk": ["df", "-h"],
+    #     "processes": ["ps", "aux"],
+    #     "date": ["date"],
+    # }
+    # selected = request.form.get("diagnostic", "date")
+    # command = safe_commands.get(selected, safe_commands["date"])
+    # output = subprocess.check_output(command, text=True)
+
     return render_template(
         "admin_diagnostics.html",
         diagnostics=diagnostics,
@@ -286,4 +307,5 @@ def admin_diagnostics():
 
 
 if __name__ == "__main__":
+    # vulnerable to command injection because the Flask app is run with debug mode enabled, which can expose sensitive information and allow arbitrary code execution.
     app.run(debug=True, host="0.0.0.0", port=5000)
