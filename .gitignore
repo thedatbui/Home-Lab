@@ -1,0 +1,19 @@
+.gitignore · GITIGNORE
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+ 
+# Local runtime data (SQLite DB is regenerated with `flask init-db`)
+instance/
+ 
+# Generated reports (kept as CI artifacts instead)
+bandit-report.html
+reports/
+dependency-check-report.*
+ 
+# Secrets / local config
+.env
+*.pem
+*.key

@@ -3,6 +3,9 @@
 A hands-on cybersecurity home lab simulating a realistic attack chain against a deliberately vulnerable web application, with network segmentation, a SIEM, and documented mitigations.
 
 ---
+> ⚠️ **Deliberately vulnerable application, for educational use only.**
+> Do not deploy it on a public network or reuse any of its code in production.
+> All attacks were performed in an isolated lab I own.
 
 ## Overview
 
@@ -75,7 +78,7 @@ ffuf -w /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt \
 
 ---
 
-### 2. [Weaponization & Delivery: CSRF via Stored XSS](docs/02-xss-crf.md)
+### 2. [Weaponization & Delivery: CSRF via Stored XSS](docs/02-xss-csrf.md)
 
 **Vulnerabilities:** Stored XSS + missing CSRF protection (Flask does not enable it by default)
 
@@ -102,7 +105,9 @@ Because Flask has no CSRF protection out of the box (unlike Django or Laravel), 
 
 **Vulnerability:** Unrestricted file upload
 
-Logged in as the newly created admin, the attacker uploads a PHP webshell via an admin upload form that validates only the file extension, not the real MIME type
+Logged in as the newly created admin, the attacker uploads a PHP webshell via an admin upload form that validates only the file extension, not the real MIME type.
+
+The uploaded file is executed through `PHP-FPM` behind `Nginx` on the webserver host.
 
 ---
 
@@ -143,15 +148,16 @@ With a stable shell on the backend server, the attacker:
 
 ## Vulnerabilities & Mitigations
 
-| # | Vulnerability | OWASP | Impact | Mitigation |
+| # | Vulnerability | OWASP 2021 | Where | Mitigation |
 |---|---|---|---|---|
-| 1 | Stored XSS | A03 | Executes attacker code in victim's browser | Escape all output with `markupsafe.escape()`, use Jinja2 autoescaping |
-| 2 | Missing CSRF protection | A01 | Forged admin actions via XSS | Add `Flask-WTF` CSRFProtect, validate CSRF token server-side |
-| 3 | IDOR on user profiles | A01 | Access any user's data by ID | Enforce server-side ownership check: `if current_user.id != profile.id: abort(403)` |
-| 4 | Unrestricted file upload | A05 | Webshell upload, code execution | Whitelist extensions, validate real MIME type, store uploads outside webroot |
-| 5 | SQL Injection on login | A03 | Authentication bypass, data extraction | Use parameterized queries: `cursor.execute("SELECT * FROM users WHERE username = ?", (username,))` |
-| 6 | Debug mode enabled | A05 | Exposes stack traces and Werkzeug console | Set `debug=False` in production, use environment variables for config |
-| 7 | Server-side role validation missing | A01 | Privilege escalation via crafted POST | Whitelist valid roles server-side, never trust client-submitted role values |
+| 1 | Stored XSS | A03 | `safe` on review body (`product.html`, `admin.html`) | Remove `safe`, rely on Jinja autoescaping, add CSP |
+| 2 | Missing CSRF protection | A01 | all POST routes | Flask-WTF `CSRFProtect`, SameSite cookies |
+| 3 | Unrestricted file upload | A04/A05 | `upload.php` (outside the Flask app) | Extension allowlist, MIME check, store outside webroot, no execution |
+| 4 | Hardcoded secret key | A02 | `SECRET_KEY="dev"` | Load from environment, rotate |
+| 5 | Weak password hashing + hardcoded admin | A02 | MD5, `schema.sql` | bcrypt/Argon2, no default credentials |
+| 6 | Open redirect | A01 | `next` parameter in `login()` | Accept only relative paths |
+| 7 | Debug mode on `0.0.0.0` | A05 | `app.run(debug=True)` | Gunicorn behind Nginx, debug off |
+| 8 | `shell=True` pattern | A03 | `/admin/diagnostics` | Argument list, no shell (latent risk, not exploitable as written) |
 
 ---
 
@@ -164,7 +170,7 @@ With a stable shell on the backend server, the attacker:
 | Login brute force | Yes | Wazuh rules - Auth failures |
 | Webshell upload | Yes | FIM alert on `/var/www/uploads/` (new file created) |
 | Reverse shell | Partial | Outbound connection on non-standard port |
-| Honeyfile access | Yes (CRITICAL) | FIM configured with `report_changes=yes` on honeyfile |
+| Honeyfile access | Yes (CRITICAL) | auditd watch rule (`honeyfile_access`) collected by the Wazuh agent, custom rule at level 15 |
 
 > Notable finding: SQL injection and IDOR generate no alerts out of the box, SAST (Bandit/Semgrep) is required to catch these before deployment. This illustrates why SAST and SIEM are complementary, not interchangeable.
 
@@ -201,16 +207,15 @@ Wazuh is configured to fire a CRITICAL alert the instant this file is read. Duri
 
 ## CI/CD Security Pipeline
 
-See the detailed [CI/CD security pipeline documentation](docs/08-ci-cd-pipelines.md).
+See the detailed [CI/CD security pipeline documentation](docs/06-ci-cd-pipelines.md).
 
-The application's source code is also scanned automatically on every push via a GitLab CI/CD pipeline:
+The source code is scanned on every push and pull request by a **GitHub Actions** workflow
+(`.github/workflows/main.yml`):
 
-```
-Push → SAST (Bandit) → SCA (OwASP dependency-check) → Secret Scan (Gitleaks) → Block if critical findings
-```
+Push → SAST (Bandit, Semgrep) → Secret scan (Gitleaks) → SCA (OWASP Dependency-Check) → reports as artifacts
 
-This closes the loop between the defensive lab (runtime detection) and secure development (shift-left scanning).
-
+All scanners run in **report-only mode** because the application is vulnerable on purpose.
+In a real project the same jobs would fail the build on critical findings.
 ---
 
 ## Tools Used

@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# NOTE: this is a deliberately vulnerable training app, so every scanner runs in
+# report-only mode (continue-on-error). On a real project, remove
+# `continue-on-error` so critical findings fail the pipeline.
+
 jobs:
   sast:
     runs-on: ubuntu-latest
@@ -33,18 +40,30 @@ jobs:
           name: bandit-report
           path: bandit-report.html
 
+      # The vulnerable source files are scanned too, so the findings appear in the log.
       - name: Run Semgrep
         run: >
           semgrep scan
           --config p/owasp-top-ten
           --config p/security-audit
           --config p/secrets
-          --exclude app.py
-          --exclude db.py
           --exclude .git
           --exclude instance
           --exclude reports
         continue-on-error: true
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # scan the full git history, not only the last commit
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true   # the lab intentionally contains a hardcoded key
 
   sca:
     runs-on: ubuntu-latest
