@@ -1,1 +1,7 @@
 bandit
+Flask
+Authlib
+bcrypt
+python-dotenv
+requests
+msal

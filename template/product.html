@@ -31,6 +31,7 @@
 
     {% if session.get("username") %}
       <form method="post" class="card card-body bg-light border-0 mb-4">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <label class="form-label" for="rating">Note</label>
         <select class="form-select mb-3" name="rating" id="rating" required>
           <option value="5">5 / 5</option>
@@ -54,8 +55,9 @@
           <strong>{{ review["username"] }}</strong>
           <span aria-label="Note">{{ review["rating"] }} / 5</span>
         </div>
-        {# vulnerable to stored XSS because review content is rendered without HTML escaping #}
-        <p class="mb-0">{{ review["body"]|safe }}</p>
+        {# vulnerable to stored XSS because review content is rendered without HTML escaping 
+        <p class="mb-0">{{ review["body"]|safe }}</p> #}
+        <p class="mb-0">{{ review["body"] }}</p>
       </article>
     {% else %}
       <p class="text-secondary">No reviews yet.</p>

@@ -8,7 +8,8 @@ CREATE TABLE user (
   username TEXT UNIQUE NOT NULL,
   -- vulnerable to credential disclosure because passwords are stored in plaintext
   password TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'customer'
+  role TEXT NOT NULL DEFAULT 'customer',
+  entra_oid TEXT UNIQUE
 );
 
 CREATE TABLE post (

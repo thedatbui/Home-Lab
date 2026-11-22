@@ -10,6 +10,7 @@
   </p>
 
   <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label for="diagnostic">Diagnostic</label>
     <select name="diagnostic" id="diagnostic">
       {% for name in diagnostics %}

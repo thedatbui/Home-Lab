@@ -1,40 +1,153 @@
+from glob import escape
+
 import db
-import hashlib
 import os
 import subprocess
+import bcrypt
+import logging
+import requests, msal
+import secrets
+import hmac
+
 from db import get_db
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
-import logging
 from werkzeug.middleware.proxy_fix import ProxyFix
+from authlib.integrations.flask_client import OAuth
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 app = Flask(
     __name__,
     template_folder="template",
     instance_relative_config=True,
 )
-
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-
 app.config.from_mapping(
     # vulnerable to forged Flask session cookies because the signing key is hardcoded
-    SECRET_KEY="dev",
+    # SECRET_KEY="dev",
     # alternatively, you can use an environment variable for the secret key
-    # SECRET_KEY=os.environ.get("SECRET_KEY"),
-
+    SECRET_KEY=os.environ.get("SECRET_KEY"),
     DATABASE=os.path.join(app.instance_path, "app.sqlite")
 )
 
-os.makedirs(app.instance_path, exist_ok=True)
 
+
+os.makedirs(app.instance_path, exist_ok=True)
 db.init_app(app)
+
+
+def generate_csrf_token():
+    token = session.get("_csrf_token")
+    if token is None:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+@app.context_processor
+def inject_csrf_token():
+    return {"csrf_token": generate_csrf_token}
+
+
+@app.before_request
+def validate_csrf_token():
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return None
+
+    submitted_token = request.form.get("_csrf_token", "")
+    session_token = session.get("_csrf_token", "")
+    if not session_token or not hmac.compare_digest(submitted_token, session_token):
+        abort(403, description="Invalid or missing CSRF token")
 
 logging.basicConfig(
     filename='/var/log/myapp/app.log',
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s'
 )
-
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+
+oauth = OAuth(app)
+oauth.register(
+    name="entra",
+    client_id=os.environ["ENTRA_CLIENT_ID"],
+    client_secret=os.environ["ENTRA_CLIENT_SECRET"],
+    server_metadata_url=(
+        f"https://login.microsoftonline.com/{os.environ['ENTRA_TENANT_ID']}"
+        "/v2.0/.well-known/openid-configuration"
+    ),
+    client_kwargs={"scope": "openid profile email"},
+)
+
+@app.route("/login/entra")
+def login_entra():
+    return oauth.entra.authorize_redirect(url_for("auth_callback", _external=True))
+
+@app.route("/auth/callback")
+def auth_callback():
+    token = oauth.entra.authorize_access_token()
+    claims = token["userinfo"]
+
+    username = claims["name"]
+    oid = claims["oid"]
+    roles = claims.get("roles", [])
+
+    database = get_db()
+    local_user = database.execute("SELECT id FROM user WHERE entra_oid = ?", (oid,)).fetchone()
+    if local_user is None:
+        database.execute(
+            "INSERT INTO user (username, entra_oid, password, role) VALUES (?, ?, ?, ?)",
+            (username, oid, "", "admin" if "ShopAdmin" in roles else "customer"),
+        )
+        database.commit()
+    else:
+        user_id = local_user["id"]
+        role = local_user["role"]
+        database.execute(
+            "UPDATE user SET username = ?, role = ? WHERE entra_oid = ?",
+            (username, "admin" if "ShopAdmin" in roles else "customer", oid),
+        )
+        database.commit()
+
+    session.clear()
+    session["username"] = username
+    session["user_id"] = user_id
+    session["role"] = role
+    session["entra_oid"] = oid
+    claims = token["userinfo"]
+    return redirect(url_for("index"))
+
+def graph_token():
+    cca = msal.ConfidentialClientApplication(
+        os.environ.get("GRAPH_CLIENT_ID", os.environ["ENTRA_CLIENT_ID"]),
+        authority=f"https://login.microsoftonline.com/{os.environ['ENTRA_TENANT_ID']}",
+        client_credential=os.environ["GRAPH_CLIENT_SECRET"],
+    )
+    result = cca.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+    if "access_token" not in result:
+        raise RuntimeError(result.get("error_description", "Unable to acquire a Microsoft Graph token"))
+    return result["access_token"]
+
+def create_entra_user(display_name, nickname, upn, temp_password):
+    body = {
+        "accountEnabled": True,
+        "displayName": display_name,
+        "mailNickname": nickname,
+        "userPrincipalName": upn,  
+        "passwordProfile": {
+            "forceChangePasswordNextSignIn": True,
+            "password": temp_password,
+        },
+    }
+    r = requests.post(
+        "https://graph.microsoft.com/v1.0/users",
+        headers={"Authorization": f"Bearer {graph_token()}"},
+        json=body, timeout=10,
+    )
+    r.raise_for_status()
+    return r.json()
 
 @app.route("/")
 def index():
@@ -54,13 +167,9 @@ def users(user_id):
 @app.route("/register", methods=("GET", "POST"))
 def register():
     if request.method == "POST":
-        username = request.form["username"]
+        username = request.form["username"].strip()
         password = request.form["password"]
-        # using weak hashing algorithm (MD5) for password storage, which is vulnerable to brute-force attacks
-        password_hash = hashlib.md5(password.encode("utf-8")).hexdigest()
-        # alternatively, you can use a stronger hashing algorithm like bcrypt or Argon2 for better security.
-        # For example, using bcrypt:
-        # password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
         db = get_db()
         error = None
@@ -69,54 +178,88 @@ def register():
             error = "Username is required."
         elif not password:
             error = "Password is required."
+        elif "@" not in username:
+            error = "Username must be a complete email address."
         elif db.execute(
             "SELECT id FROM user WHERE username = ?", (username,)
         ).fetchone() is not None:
             error = "User {} is already registered.".format(username)
 
         if error is None:
-            db.execute(
-                "INSERT INTO user (username, password) VALUES (?, ?)",
-                (username, password_hash)
-            )
-            db.commit()
-            logging.info("New user registered: %s", username)
-            return redirect(url_for("login"))
+            nickname = username.split("@", 1)[0]
+            try:
+                entra_user = create_entra_user(nickname, nickname, username, password)
+            except requests.HTTPError as exc:
+                response = exc.response
+                details = response.json() if response is not None else {}
+                message = details.get("error", {}).get("message")
+                error = message or "Unable to create the Microsoft Entra account."
+                logging.warning("Microsoft Entra registration failed for %s: %s", username, exc)
+            except (requests.RequestException, RuntimeError) as exc:
+                error = str(exc) if isinstance(exc, RuntimeError) else "Unable to connect to Microsoft Entra ID."
+                logging.warning("Microsoft Entra registration error for %s: %s", username, exc)
+
+            if error is None:
+                try:
+                    db.execute(
+                        "INSERT INTO user (username, password) VALUES (?, ?)",
+                        (username, password_hash)
+                    )
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    try:
+                        requests.delete(
+                            f"https://graph.microsoft.com/v1.0/users/{os.environ['ENTRA_TENANT_ID']}",
+                            headers={"Authorization": f"Bearer {graph_token()}"},
+                            timeout=10,
+                        ).raise_for_status()
+                    except (requests.RequestException, RuntimeError, KeyError) as cleanup_exc:
+                        logging.error("Unable to remove orphan Entra account %s: %s", username, cleanup_exc)
+                    raise
+
+                logging.info("New user registered: %s", username)
+                return redirect(url_for("login"))
 
         flash(error)
 
     return render_template("auth/register.html")
 
-@app.route("/login", methods=("GET", "POST"))
-def login():
-    if request.method == "POST":
-        username = request.form["username"]
-        password = request.form["password"]
-        password_hash = hashlib.md5(password.encode("utf-8")).hexdigest()
-        print(f"Attempting login for username: {username} with password hash: {password_hash}")
-        next_url = request.args.get("next", url_for("index"))
-        # here next_url is taken directly from the request arguments without validation, which can lead to open redirect vulnerabilities if an attacker crafts a malicious URL.
-        # for example, an attacker could send a link like /login?next=http://malicious-site.com to trick users into visiting a malicious site after login.
+# @app.route("/login", methods=("GET", "POST"))
+# def login():
+#     if request.method == "POST":
+#         username = request.form["username"]
+#         password = request.form["password"]
+#         next_url = request.args.get("next", url_for("index"))
+#         # here next_url is taken directly from the request arguments without validation, which can lead to open redirect vulnerabilities if an attacker crafts a malicious URL.
+#         # for example, an attacker could send a link like /login?next=http://malicious-site.com to trick users into visiting a malicious site after login.
 
-        query = "SELECT * FROM user WHERE username = ? AND password = ?"
-        user = get_db().execute(query, (username, password_hash)).fetchone()
+#         user = get_db().execute(
+#             "SELECT * FROM user WHERE username = ?", (username,)
+#         ).fetchone()
 
-        if user is not None:
-            session.clear()
-            session["username"] = user["username"]
-            session["user_id"] = user["id"]
-            logging.info("Successful login for username: %s - ip: %s", username, request.remote_addr)
-            # Intentionally accepts an absolute URL to demonstrate an open redirect.
-            return redirect(next_url)
-            # Alternatively, you can use a safer approach to prevent open redirects by validating the next_url:
-            # if not next_url.startswith("/"):
-            #     next_url = url_for("index")
-            # return redirect(next_url)
+#         password_hash = user["password"] if user is not None else ""
+#         valid_password = (
+#             bool(password_hash)
+#             and bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+#         )
 
-        logging.warning("Failed login attempt for username: %s - ip: %s", username, request.remote_addr)
-        return "Invalid username or password"
+#         if user is not None and valid_password:
+#             session.clear()
+#             session["username"] = user["username"]
+#             session["user_id"] = user["id"]
+#             logging.info("Successful login for username: %s - ip: %s", username, request.remote_addr)
+#             # Intentionally accepts an absolute URL to demonstrate an open redirect.
+#             return redirect(next_url)
+#             # Alternatively, you can use a safer approach to prevent open redirects by validating the next_url:
+#             # if not next_url.startswith("/"):
+#             #     next_url = url_for("index")
+#             # return redirect(next_url)
 
-    return render_template("auth/login.html")
+#         logging.warning("Failed login attempt for username: %s - ip: %s", username, request.remote_addr)
+#         return "Invalid username or password"
+        
+#     return render_template("auth/login.html")
 
 @app.route("/logout")
 def logout():
@@ -125,16 +268,22 @@ def logout():
 
 @app.route("/admin")
 def admin():
-    username = session.get("username")
-    if username is None:
-        logging.info("Accessing admin page for username: %s - ip: %s", username, request.remote_addr)
+    userName = session.get("username")
+    user_id = session.get("user_id")
+
+    if userName is None:
+        logging.info("Accessing admin page for user: %s - ip: %s", userName, request.remote_addr)
+        return redirect(url_for("login", next=request.full_path))
+
+    if user_id is None:
+        logging.info("Accessing admin page for user_id: %s - ip: %s", user_id, request.remote_addr)
         return redirect(url_for("login", next=request.full_path))
 
     user = get_db().execute(
-        "SELECT role FROM user WHERE username = ?", (username,)
+        "SELECT role FROM user WHERE id = ?", (user_id,)
     ).fetchone()
     if user is None or user["role"] != "admin":
-        logging.warning("Unauthorized access attempt to admin page by username: %s - ip: %s", username, request.remote_addr)
+        logging.warning("Unauthorized access attempt to admin page by user_id: %s - ip: %s", user_id, request.remote_addr)
         abort(403)
 
     reviews = get_db().execute(
@@ -177,7 +326,7 @@ def product(product_id):
                 INSERT INTO review (product_id, author_id, rating, body)
                 VALUES (?, ?, ?, ?)
                 """,
-                (product_id, author["id"], rating, body),
+                (product_id, author["id"], rating, escape(body)),
             )
             database.commit()
             flash("Thank you for your review.")
@@ -202,17 +351,22 @@ def admin_create_user():
     username = session.get("username")
     if username is None:
         return redirect(url_for("login", next=request.full_path))
+    
+    user_id = session.get("user_id")
+    if user_id is None:
+        return redirect(url_for("login", next=request.full_path))
 
     user = get_db().execute(
-        "SELECT role FROM user WHERE username = ?", (username,)
+        "SELECT role FROM user WHERE id = ?", (user_id,)
     ).fetchone()
+
     if user is None or user["role"] != "admin":
         abort(403)
 
     if request.method == "POST":
         new_username = request.form["username"]
         new_password = request.form["password"]
-        new_password_hash = hashlib.md5(new_password.encode("utf-8")).hexdigest()
+        new_password_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         new_role = request.form["role"]
 
         db = get_db()
@@ -242,6 +396,7 @@ def admin_create_user():
 
     return render_template("admin_create_user.html")
 
+# intentionally vulnerable function to display all users in the database 
 @app.route("/all-users")
 def get_all_users():
     users = get_db().execute("SELECT * FROM user").fetchall()
@@ -250,15 +405,26 @@ def get_all_users():
 @app.route("/admin/uploads", methods=("GET", "POST"))
 def admin_uploads():
     username = session.get("username")
+    user_id = session.get("user_id")
     if username is None:
         return redirect(url_for("login"))
 
+    if user_id is None:
+        return redirect(url_for("login"))
+    
     user = get_db().execute(
-        "SELECT role FROM user WHERE username = ?", (username,)
+        "SELECT role FROM user WHERE id = ?", (user_id,)
     ).fetchone()
+    
     if user is None or user["role"] != "admin":
         abort(403)
-   
+
+    # upload files 
+    # if request.method == "POST":
+    #     file = request.files["file"]
+    #     if file:
+    #         file.save(f"uploads/{file.filename}")
+        
     return render_template("admin_uploads.html")
     
 @app.route("/admin/diagnostics", methods=("GET", "POST"))
@@ -266,41 +432,44 @@ def admin_diagnostics():
     username = session.get("username")
     if username is None:
         return redirect(url_for("login", next=request.full_path))
+    user_id = session.get("user_id")
+    if user_id is None:
+        return redirect(url_for("login", next=request.full_path))
 
     user = get_db().execute(
-        "SELECT role FROM user WHERE username = ?", (username,)
+        "SELECT role FROM user WHERE id = ?", (user_id,)
     ).fetchone()
     if user is None or user["role"] != "admin":
         abort(403)
 
     # Intentionally allows command injection by executing user-controlled input.
-    diagnostics = {
-        "disk": "df -h",
-        "processes": "ps aux",
-        "date": "date",
-    }
-    selected = request.form.get("diagnostic", "date")
-    command = diagnostics.get(selected, diagnostics["date"])
-    output = subprocess.check_output(
-        command,
-        shell=True,
-        text=True,
-    )
+    # diagnostics = {
+    #     "disk": "df -h",
+    #     "processes": "ps aux",
+    #     "date": "date",
+    # }
+    # selected = request.form.get("diagnostic", "date")
+    # command = diagnostics.get(selected, diagnostics["date"])
+    # output = subprocess.check_output(
+    #     command,
+    #     shell=True,
+    #     text=True,
+    # )
 
     # Alternatively, you can use a safer approach to prevent command injection by validating the selected diagnostic and using a predefined mapping of commands without executing user-controlled input directly.
     # For example:
-    # safe_commands = {
-    #     "disk": ["df", "-h"],
-    #     "processes": ["ps", "aux"],
-    #     "date": ["date"],
-    # }
-    # selected = request.form.get("diagnostic", "date")
-    # command = safe_commands.get(selected, safe_commands["date"])
-    # output = subprocess.check_output(command, text=True)
+    safe_commands = {
+        "disk": ["df", "-h"],
+        "processes": ["ps", "aux"],
+        "date": ["date"],
+    }
+    selected = request.form.get("diagnostic", "date")
+    command = safe_commands.get(selected, safe_commands["date"])
+    output = subprocess.check_output(command, text=True)
 
     return render_template(
         "admin_diagnostics.html",
-        diagnostics=diagnostics,
+        safe_commands=safe_commands,
         selected=selected,
         output=output,
     )
@@ -308,4 +477,4 @@ def admin_diagnostics():
 
 if __name__ == "__main__":
     # vulnerable to command injection because the Flask app is run with debug mode enabled, which can expose sensitive information and allow arbitrary code execution.
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=False, host="0.0.0.0", port=5000)

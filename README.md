@@ -54,6 +54,7 @@ The goal is not just to "run attacks", but to understand *why* each vulnerabilit
                        │  SIEM / Alerting     │
                        └──────────────────────┘
 ```
+The lab simulates a company mid-migration from a legacy PHP application to Flask. The legacy upload endpoint (upload.php, served by PHP-FPM behind Nginx on the LAN VM, port 80) coexists with the new Flask application (port 5000). This coexistence is intentional: legacy components kept alive during a migration are a common source of real-world vulnerabilities. In a target architecture, the upload service would run on its own host or container, under a dedicated low-privilege account, with script execution disabled in the upload directory.
 
 **Key design decisions**
 
