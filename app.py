@@ -1,5 +1,3 @@
-from glob import escape
-
 import db
 import os
 import subprocess
@@ -8,6 +6,7 @@ import logging
 import requests, msal
 import secrets
 import hmac
+import hashlib, re
 
 from db import get_db
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
@@ -28,15 +27,13 @@ app.config.from_mapping(
     # vulnerable to forged Flask session cookies because the signing key is hardcoded
     # SECRET_KEY="dev",
     # alternatively, you can use an environment variable for the secret key
-    SECRET_KEY=os.environ.get("SECRET_KEY"),
+    SECRET_KEY=os.environ["SECRET_KEY"],
     DATABASE=os.path.join(app.instance_path, "app.sqlite")
 )
 
 
-
 os.makedirs(app.instance_path, exist_ok=True)
 db.init_app(app)
-
 
 def generate_csrf_token():
     token = session.get("_csrf_token")
@@ -93,31 +90,29 @@ def auth_callback():
     username = claims["name"]
     oid = claims["oid"]
     roles = claims.get("roles", [])
+    role = "admin" if "ShopAdmin" in roles else "customer"
 
-    database = get_db()
-    local_user = database.execute("SELECT id FROM user WHERE entra_oid = ?", (oid,)).fetchone()
-    if local_user is None:
-        database.execute(
-            "INSERT INTO user (username, entra_oid, password, role) VALUES (?, ?, ?, ?)",
-            (username, oid, "", "admin" if "ShopAdmin" in roles else "customer"),
-        )
-        database.commit()
-    else:
-        user_id = local_user["id"]
-        role = local_user["role"]
-        database.execute(
-            "UPDATE user SET username = ?, role = ? WHERE entra_oid = ?",
-            (username, "admin" if "ShopAdmin" in roles else "customer", oid),
-        )
-        database.commit()
+    db_ = get_db()
+    db_.execute(
+        """INSERT INTO user (username, entra_oid, password, role) VALUES (?, ?, '', ?)
+        ON CONFLICT(entra_oid) DO UPDATE SET username = excluded.username, role = excluded.role""",
+        (username, oid, role),
+    )
+    db_.commit()
+
+    user = db_.execute(
+        "SELECT * FROM user WHERE entra_oid = ?", (oid,)
+    ).fetchone()
 
     session.clear()
-    session["username"] = username
-    session["user_id"] = user_id
-    session["role"] = role
-    session["entra_oid"] = oid
-    claims = token["userinfo"]
+    session.update({
+        "username": username,
+        "user_id": user["id"],
+        "role": user["role"],
+        "entra_oid": oid,
+    })
     return redirect(url_for("index"))
+
 
 def graph_token():
     cca = msal.ConfidentialClientApplication(
@@ -163,103 +158,101 @@ def users(user_id):
         abort(404)
     return render_template("profile.html", user=user)
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 @app.route("/register", methods=("GET", "POST"))
 def register():
     if request.method == "POST":
-        username = request.form["username"].strip()
+        display_name = request.form["display_name"].strip()
+        email = request.form["email"].strip().lower()
         password = request.form["password"]
-        password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
         db = get_db()
         error = None
 
-        if not username:
-            error = "Username is required."
+        if not display_name:
+            error = "Name is required."
+        elif not EMAIL_RE.match(email):
+            error = "A valid email address is required."
         elif not password:
             error = "Password is required."
-        elif "@" not in username:
-            error = "Username must be a complete email address."
-        elif db.execute(
-            "SELECT id FROM user WHERE username = ?", (username,)
-        ).fetchone() is not None:
-            error = "User {} is already registered.".format(username)
+        elif db.execute("SELECT id FROM user WHERE username = ?", (email,)).fetchone():
+            error = "This email is already registered."
 
         if error is None:
-            nickname = username.split("@", 1)[0]
+            local = re.sub(r"[^a-z0-9._-]", "", email.split("@", 1)[0]) or "user"
+            suffix = hashlib.sha256(email.encode()).hexdigest()[:4]   # évite les collisions d'UPN
+            nickname = f"{local}.{suffix}"
+            upn = f"{nickname}@{os.environ['ENTRA_DOMAIN']}"
+            entra_user = None
             try:
-                entra_user = create_entra_user(nickname, nickname, username, password)
+                entra_user = create_entra_user(display_name, nickname, upn, email, password)
             except requests.HTTPError as exc:
-                response = exc.response
-                details = response.json() if response is not None else {}
-                message = details.get("error", {}).get("message")
-                error = message or "Unable to create the Microsoft Entra account."
-                logging.warning("Microsoft Entra registration failed for %s: %s", username, exc)
+                logging.warning("Entra registration failed for %s: %s", email, exc.response.text)
+                msg = (exc.response.json().get("error", {}).get("message", "")
+                       if exc.response is not None else "")
+                error = msg if "password" in msg.lower() else "Unable to create the account."
             except (requests.RequestException, RuntimeError) as exc:
-                error = str(exc) if isinstance(exc, RuntimeError) else "Unable to connect to Microsoft Entra ID."
-                logging.warning("Microsoft Entra registration error for %s: %s", username, exc)
+                logging.warning("Entra registration error for %s: %s", email, exc)
+                error = "Unable to create the account."
 
             if error is None:
                 try:
-                    db.execute(
-                        "INSERT INTO user (username, password) VALUES (?, ?)",
-                        (username, password_hash)
-                    )
+                    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+                    db.execute("INSERT INTO user (username, password) VALUES (?, ?)",
+                               (email, password_hash))
                     db.commit()
                 except Exception:
                     db.rollback()
                     try:
                         requests.delete(
-                            f"https://graph.microsoft.com/v1.0/users/{os.environ['ENTRA_TENANT_ID']}",
+                            f"https://graph.microsoft.com/v1.0/users/{entra_user['id']}",
                             headers={"Authorization": f"Bearer {graph_token()}"},
                             timeout=10,
                         ).raise_for_status()
-                    except (requests.RequestException, RuntimeError, KeyError) as cleanup_exc:
-                        logging.error("Unable to remove orphan Entra account %s: %s", username, cleanup_exc)
+                    except Exception as cleanup_exc:
+                        logging.error("Orphan Entra account %s: %s", upn, cleanup_exc)
                     raise
-
-                logging.info("New user registered: %s", username)
+                logging.info("New user registered: %s", email)
                 return redirect(url_for("login"))
 
         flash(error)
-
     return render_template("auth/register.html")
 
-# @app.route("/login", methods=("GET", "POST"))
-# def login():
-#     if request.method == "POST":
-#         username = request.form["username"]
-#         password = request.form["password"]
-#         next_url = request.args.get("next", url_for("index"))
-#         # here next_url is taken directly from the request arguments without validation, which can lead to open redirect vulnerabilities if an attacker crafts a malicious URL.
-#         # for example, an attacker could send a link like /login?next=http://malicious-site.com to trick users into visiting a malicious site after login.
+@app.route("/login", methods=("GET", "POST"))
+def login():
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+        next_url = request.args.get("next", url_for("index"))
+        # here next_url is taken directly from the request arguments without validation, which can lead to open redirect vulnerabilities if an attacker crafts a malicious URL.
+        # for example, an attacker could send a link like /login?next=http://malicious-site.com to trick users into visiting a malicious site after login.
 
-#         user = get_db().execute(
-#             "SELECT * FROM user WHERE username = ?", (username,)
-#         ).fetchone()
+        user = get_db().execute(
+            "SELECT * FROM user WHERE username = ?", (username,)
+        ).fetchone()
 
-#         password_hash = user["password"] if user is not None else ""
-#         valid_password = (
-#             bool(password_hash)
-#             and bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
-#         )
+        password_hash = user["password"] if user is not None else ""
+        valid_password = (
+            bool(password_hash)
+            and bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+        )
 
-#         if user is not None and valid_password:
-#             session.clear()
-#             session["username"] = user["username"]
-#             session["user_id"] = user["id"]
-#             logging.info("Successful login for username: %s - ip: %s", username, request.remote_addr)
-#             # Intentionally accepts an absolute URL to demonstrate an open redirect.
-#             return redirect(next_url)
-#             # Alternatively, you can use a safer approach to prevent open redirects by validating the next_url:
-#             # if not next_url.startswith("/"):
-#             #     next_url = url_for("index")
-#             # return redirect(next_url)
+        if user is not None and valid_password:
+            session.clear()
+            session["username"] = user["username"]
+            session["user_id"] = user["id"]
+            logging.info("Successful login for username: %s - ip: %s", username, request.remote_addr)
+            # Intentionally accepts an absolute URL to demonstrate an open redirect.
+            return redirect(next_url)
+            # Alternatively, you can use a safer approach to prevent open redirects by validating the next_url:
+            # if not next_url.startswith("/"):
+            #     next_url = url_for("index")
+            # return redirect(next_url)
 
-#         logging.warning("Failed login attempt for username: %s - ip: %s", username, request.remote_addr)
-#         return "Invalid username or password"
+        logging.warning("Failed login attempt for username: %s - ip: %s", username, request.remote_addr)
+        return "Invalid username or password"
         
-#     return render_template("auth/login.html")
+    return render_template("auth/login.html")
 
 @app.route("/logout")
 def logout():
@@ -312,13 +305,14 @@ def product(product_id):
         if username is None:
             return redirect(url_for("login", next=request.full_path))
 
+        user_id = session.get("user_id")
+        if user_id is None:
+            return redirect(url_for("login", next=request.full_path))
+
         rating = request.form.get("rating", type=int)
         body = request.form.get("body", "").strip()
-        author = database.execute(
-            "SELECT id FROM user WHERE username = ?", (username,)
-        ).fetchone()
 
-        if author is None or rating not in range(1, 6) or not body:
+        if rating not in range(1, 6) or not body:
             flash("Invalid review submission. Please ensure you are logged in, the rating is between 1 and 5, and the review body is not empty.")
         else:
             database.execute(
@@ -326,7 +320,7 @@ def product(product_id):
                 INSERT INTO review (product_id, author_id, rating, body)
                 VALUES (?, ?, ?, ?)
                 """,
-                (product_id, author["id"], rating, escape(body)),
+                (product_id, user_id, rating, body),
             )
             database.commit()
             flash("Thank you for your review.")

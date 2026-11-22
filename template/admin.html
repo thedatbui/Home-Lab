@@ -44,7 +44,7 @@
             <td>{{ review["username"] }}</td>
             <td>{{ review["rating"] }}/5</td>
             {# vulnerable to stored XSS because review content is rendered without HTML escaping #}
-            <td>{{ review["body"]|safe }}</td>
+            <td>{{ review["body"] }}</td>
             <td>{{ review["created"] }}</td>
           </tr>
         {% else %}
