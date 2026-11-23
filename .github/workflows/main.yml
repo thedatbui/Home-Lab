@@ -30,15 +30,19 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt semgrep
 
-      - name: Run Bandit (HTML report)
-        run: bandit app.py db.py -f html -o bandit-report.html
-        continue-on-error: true
+      - name: Run Bandit (JSON)
+        run: |
+          bandit -r . -f json -o bandit.json || [ $? -eq 1 ]
+          test -s bandit.json
 
-      - name: Upload Bandit report
-        uses: actions/upload-artifact@v4
-        with:
-          name: bandit-report
-          path: bandit-report.html
+      - name: Send report to the registry
+        if: always()
+        run: |
+          curl -sS -f -X POST "http://localhost:3000/ingest/bandit" \
+            -H "Content-Type: application/json" \
+            -H "X-Repo: ${{ github.repository }}" \
+            -H "X-Commit: ${{ github.sha }}" \
+            --data-binary @bandit.json
 
       # The vulnerable source files are scanned too, so the findings appear in the log.
       - name: Run Semgrep
