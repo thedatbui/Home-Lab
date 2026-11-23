@@ -35,14 +35,12 @@ jobs:
           bandit -r . -f json -o bandit.json || [ $? -eq 1 ]
           test -s bandit.json
 
-      - name: Send report to the registry
+      - name: upload Bandit findings to local server
         if: always()
-        run: |
-          curl -sS -f -X POST "http://localhost:3000/ingest/bandit" \
-            -H "Content-Type: application/json" \
-            -H "X-Repo: ${{ github.repository }}" \
-            -H "X-Commit: ${{ github.sha }}" \
-            --data-binary @bandit.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-json
+          path: bandit.json 
 
       # The vulnerable source files are scanned too, so the findings appear in the log.
       - name: Run Semgrep
